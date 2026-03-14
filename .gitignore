@@ -1,0 +1,16 @@
+.DS_Store
+.swamp/
+/models/
+/workflows/
+* [0-9]
+* [0-9].*
+/vaults/
+
+# BEGIN swamp managed section - DO NOT EDIT
+
+# Runtime data (not needed in version control)
+.swamp/
+
+# Claude Code configuration (managed by swamp)
+.claude/
+# END swamp managed section

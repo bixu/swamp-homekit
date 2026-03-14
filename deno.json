@@ -1,0 +1,14 @@
+{
+  "fmt": {
+    "include": ["extensions/models/"]
+  },
+  "lint": {
+    "include": ["extensions/models/"],
+    "rules": {
+      "exclude": ["no-import-prefix"]
+    }
+  },
+  "test": {
+    "include": ["extensions/models/"]
+  }
+}
