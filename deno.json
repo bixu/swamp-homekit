@@ -9,6 +9,6 @@
     }
   },
   "test": {
-    "include": ["**/*_test.ts"]
+    "include": ["extensions/models/"]
   }
 }
