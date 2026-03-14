@@ -303,7 +303,6 @@ export const model = {
         // deno-lint-ignore no-explicit-any
         const discovery = JSON.parse(new TextDecoder().decode(raw)) as any;
 
-        // deno-lint-ignore no-explicit-any
         const acc = discovery.accessories?.find(
           // deno-lint-ignore no-explicit-any
           (a: any) =>
@@ -354,12 +353,11 @@ export const model = {
           throw new Error("No discovery data. Run 'discover' first.");
         }
 
-        // deno-lint-ignore no-explicit-any
         const discovery = JSON.parse(
           new TextDecoder().decode(rawDiscovery),
+          // deno-lint-ignore no-explicit-any
         ) as any;
 
-        // deno-lint-ignore no-explicit-any
         const acc = discovery.accessories?.find(
           // deno-lint-ignore no-explicit-any
           (a: any) =>
