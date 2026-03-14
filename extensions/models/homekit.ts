@@ -355,7 +355,9 @@ export const model = {
         }
 
         // deno-lint-ignore no-explicit-any
-        const discovery = JSON.parse(new TextDecoder().decode(rawDiscovery)) as any;
+        const discovery = JSON.parse(
+          new TextDecoder().decode(rawDiscovery),
+        ) as any;
 
         // deno-lint-ignore no-explicit-any
         const acc = discovery.accessories?.find(
@@ -386,9 +388,11 @@ export const model = {
         const pairing = JSON.parse(new TextDecoder().decode(rawPairing)) as any;
 
         // Resolve vault expressions for sensitive fields
-        const vaultExprRegex = /^\$\{\{\s*vault\.get\(\s*'([^']+)',\s*'([^']+)'\s*\)\s*\}\}$/;
+        const vaultExprRegex =
+          /^\$\{\{\s*vault\.get\(\s*'([^']+)',\s*'([^']+)'\s*\)\s*\}\}$/;
         for (const key of Object.keys(pairing)) {
-          const match = typeof pairing[key] === "string" && pairing[key].match(vaultExprRegex);
+          const match = typeof pairing[key] === "string" &&
+            pairing[key].match(vaultExprRegex);
           if (match && context.vaultService) {
             pairing[key] = await context.vaultService.get(match[1], match[2]);
           }
