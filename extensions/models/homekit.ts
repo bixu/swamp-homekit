@@ -288,20 +288,23 @@ export const model = {
         });
 
         // Look up accessory from discovery data
-        const discovery = await context.dataRepository.getContent(
-          context.definition.id,
-          "discovery",
+        const raw = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
           "latest",
         );
 
-        if (!discovery) {
+        if (!raw) {
           throw new Error(
             "No discovery data. Run 'discover' first to find accessories.",
           );
         }
 
         // deno-lint-ignore no-explicit-any
-        const acc = (discovery as any).accessories?.find(
+        const discovery = JSON.parse(new TextDecoder().decode(raw)) as any;
+
+        // deno-lint-ignore no-explicit-any
+        const acc = discovery.accessories?.find(
           // deno-lint-ignore no-explicit-any
           (a: any) =>
             a.name.toLowerCase().includes(args.accessoryName.toLowerCase()),
@@ -321,7 +324,7 @@ export const model = {
 
         const handle = await context.writeResource(
           "pairing",
-          acc.id.replace(/:/g, "-"),
+          "pairing-" + acc.id.replace(/:/g, "-"),
           {
             ...pairing,
             pairedAt: new Date().toISOString(),
@@ -342,17 +345,20 @@ export const model = {
       }),
       execute: async (args, context) => {
         // Look up accessory
-        const discovery = await context.dataRepository.getContent(
-          context.definition.id,
-          "discovery",
+        const rawDiscovery = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
           "latest",
         );
-        if (!discovery) {
+        if (!rawDiscovery) {
           throw new Error("No discovery data. Run 'discover' first.");
         }
 
         // deno-lint-ignore no-explicit-any
-        const acc = (discovery as any).accessories?.find(
+        const discovery = JSON.parse(new TextDecoder().decode(rawDiscovery)) as any;
+
+        // deno-lint-ignore no-explicit-any
+        const acc = discovery.accessories?.find(
           // deno-lint-ignore no-explicit-any
           (a: any) =>
             a.name.toLowerCase().includes(args.accessoryName.toLowerCase()),
@@ -364,16 +370,28 @@ export const model = {
         }
 
         // Look up pairing
-        const pairingId = acc.id.replace(/:/g, "-");
-        const pairing = await context.dataRepository.getContent(
-          context.definition.id,
-          "pairing",
+        const pairingId = "pairing-" + acc.id.replace(/:/g, "-");
+        const rawPairing = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
           pairingId,
         );
-        if (!pairing) {
+        if (!rawPairing) {
           throw new Error(
             `No pairing for "${acc.name}". Run 'pair' first with the setup code.`,
           );
+        }
+
+        // deno-lint-ignore no-explicit-any
+        const pairing = JSON.parse(new TextDecoder().decode(rawPairing)) as any;
+
+        // Resolve vault expressions for sensitive fields
+        const vaultExprRegex = /^\$\{\{\s*vault\.get\(\s*'([^']+)',\s*'([^']+)'\s*\)\s*\}\}$/;
+        for (const key of Object.keys(pairing)) {
+          const match = typeof pairing[key] === "string" && pairing[key].match(vaultExprRegex);
+          if (match && context.vaultService) {
+            pairing[key] = await context.vaultService.get(match[1], match[2]);
+          }
         }
 
         context.logger.info("Connecting to {name} at {address}:{port}", {
