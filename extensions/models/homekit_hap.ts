@@ -72,9 +72,9 @@ export function tlvDecode(data: Uint8Array): Map<number, Uint8Array> {
 
 // ─── BigInt helpers ──────────────────────────────────────────────────────────
 
-const SRP_PAD_LEN = 384; // 3072 bits = 384 bytes
+export const SRP_PAD_LEN = 384; // 3072 bits = 384 bytes
 
-function bigintToBytes(n: bigint, length: number): Uint8Array {
+export function bigintToBytes(n: bigint, length: number): Uint8Array {
   const hex = n.toString(16).padStart(length * 2, "0");
   const bytes = new Uint8Array(length);
   for (let i = 0; i < length; i++) {
@@ -83,13 +83,13 @@ function bigintToBytes(n: bigint, length: number): Uint8Array {
   return bytes;
 }
 
-function bytesToBigint(bytes: Uint8Array): bigint {
+export function bytesToBigint(bytes: Uint8Array): bigint {
   let hex = "";
   for (const b of bytes) hex += b.toString(16).padStart(2, "0");
   return BigInt("0x" + (hex || "0"));
 }
 
-function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
+export function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
   let result = 1n;
   base = ((base % mod) + mod) % mod;
   while (exp > 0n) {
@@ -102,7 +102,7 @@ function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
 
 // ─── SRP-6a (RFC 5054, 3072-bit) ────────────────────────────────────────────
 
-const _N_HEX =
+export const _N_HEX =
   "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74" +
   "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437" +
   "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7E" +
@@ -114,7 +114,7 @@ const _N_HEX =
   "A33A85521ABDF1CBA64ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1" +
   "E4C7ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6BF12FFA06D9" +
   "8A0864D87602733EC86A64521F2B18177B200CBBE117577A615D6C770988C0B" +
-  "AD946E208E24FA074E5AB3143DB5BFCE0FD108E4B82D120A93AD2CAFFFFFF" +
+  "AD946E208E24FA074E5AB3143DB5BFCE0FD108E4B82D120A93AD2CAFFFFFFFF" +
   "FFFFFFFF";
 const N = BigInt("0x" + _N_HEX);
 const g = 5n;
@@ -135,11 +135,11 @@ export class SRPClient {
   private username: string;
   private password: string;
 
-  constructor(username: string, password: string) {
+  constructor(username: string, password: string, privateKey?: Uint8Array) {
     this.username = username;
     this.password = password;
-    // Generate random private key a (256 bits)
-    const aBytes = crypto.getRandomValues(new Uint8Array(32));
+    // Use provided private key or generate random (256 bits)
+    const aBytes = privateKey ?? crypto.getRandomValues(new Uint8Array(32));
     this.a = bytesToBigint(aBytes);
     // Compute public key A = g^a mod N
     this.A = modPow(g, this.a, N);
@@ -184,8 +184,9 @@ export class SRPClient {
     this.K = sha512(bigintToBytes(S, SRP_PAD_LEN));
 
     // M1 = H(H(N) xor H(g) | H(I) | salt | A | B | K)
+    // N and g are hashed as their minimal big-endian byte representations
     const hN = sha512(bigintToBytes(N, SRP_PAD_LEN));
-    const hg = sha512(bigintToBytes(g, SRP_PAD_LEN));
+    const hg = sha512(new Uint8Array([Number(g)]));
     const hNxorHg = new Uint8Array(hN.length);
     for (let i = 0; i < hN.length; i++) hNxorHg[i] = hN[i] ^ hg[i];
 
@@ -500,8 +501,9 @@ export async function pairSetup(
     const serverPubKey = tlv2.get(TLV.PublicKey)!;
 
     // ── M3: Client → Accessory ──
-    const password = setupCode.replace(/-/g, "");
-    const srp = new SRPClient("Pair-Setup", password);
+    // HAP spec says digits only, but real accessories (including Apple's
+    // simulator) expect the code with dashes as the SRP password.
+    const srp = new SRPClient("Pair-Setup", setupCode);
     srp.setServerValues(salt, serverPubKey);
 
     const m3 = tlvEncode([
