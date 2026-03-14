@@ -1,0 +1,32 @@
+name: Deno
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb  # v2.0.3
+        with:
+          deno-version: v2.x
+
+      - name: Verify formatting
+        run: deno fmt --check
+
+      - name: Run linter
+        run: deno lint
+
+      - name: Run tests
+        run: deno test --no-check --allow-env
