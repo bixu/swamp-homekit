@@ -1,6 +1,13 @@
 import { z } from "npm:zod@4";
 import bonjourModule from "npm:bonjour-service@1.3.0";
-import { extractSensorReadings, pairSetup, pairVerify } from "./homekit_hap.ts";
+import {
+  coerceValue,
+  extractControllableServices,
+  extractSensorReadings,
+  pairSetup,
+  pairVerify,
+  resolveCharacteristic,
+} from "./homekit_hap.ts";
 
 // deno-lint-ignore no-explicit-any
 const Bonjour = (bonjourModule as any).default || bonjourModule;
@@ -107,6 +114,23 @@ const SensorSummarySchema = z.object({
   generatedAt: z.string(),
 });
 
+const ControlResultSchema = z.object({
+  accessoryName: z.string(),
+  accessoryAddress: z.string(),
+  characteristic: z.string(),
+  serviceName: z.string(),
+  value: z.union([z.number(), z.string(), z.boolean()]),
+  success: z.boolean(),
+  controlledAt: z.string(),
+});
+
+const ControlSummarySchema = z.object({
+  method: z.string(),
+  summary: z.string(),
+  details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  generatedAt: z.string(),
+});
+
 function discoverAccessories(
   timeout: number,
 ): Promise<Record<string, unknown>[]> {
@@ -177,6 +201,18 @@ export const model = {
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
+    controlResult: {
+      description: "Result of a control operation on a HomeKit accessory",
+      schema: ControlResultSchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 20,
+    },
+    controlSummary: {
+      description: "Summary of a control operation",
+      schema: ControlSummarySchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
   },
   methods: {
     discover: {
@@ -231,7 +267,7 @@ export const model = {
 
         const discoveryHandle = await context.writeResource(
           "discovery",
-          "latest",
+          "discovery-latest",
           {
             totalAccessories: accessories.length,
             timeoutSeconds: timeout,
@@ -291,7 +327,7 @@ export const model = {
         const raw = await context.dataRepository.getContent(
           context.modelType,
           context.modelId,
-          "latest",
+          "discovery-latest",
         );
 
         if (!raw) {
@@ -347,7 +383,7 @@ export const model = {
         const rawDiscovery = await context.dataRepository.getContent(
           context.modelType,
           context.modelId,
-          "latest",
+          "discovery-latest",
         );
         if (!rawDiscovery) {
           throw new Error("No discovery data. Run 'discover' first.");
@@ -467,6 +503,188 @@ export const model = {
           );
 
           return { dataHandles: [summaryHandle, ...handles] };
+        } finally {
+          session.close();
+        }
+      },
+    },
+    controlAccessory: {
+      description:
+        "Control a paired HomeKit accessory (toggle lights, lock/unlock, set temperature, etc.)",
+      arguments: z.object({
+        accessoryName: z.string().describe(
+          "Name of a discovered accessory to control",
+        ),
+        characteristic: z.string().describe(
+          "Characteristic to set (e.g., On, Brightness, LockTargetState, TargetTemperature)",
+        ),
+        value: z.union([z.number(), z.string(), z.boolean()]).describe(
+          "Value to set (e.g., true, 75, 0)",
+        ),
+        serviceName: z.string().optional().describe(
+          "Service name to target (optional, for accessories with multiple services)",
+        ),
+      }),
+      execute: async (args, context) => {
+        // Look up accessory
+        const rawDiscovery = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          "discovery-latest",
+        );
+        if (!rawDiscovery) {
+          throw new Error("No discovery data. Run 'discover' first.");
+        }
+
+        const discovery = JSON.parse(
+          new TextDecoder().decode(rawDiscovery),
+          // deno-lint-ignore no-explicit-any
+        ) as any;
+
+        const acc = discovery.accessories?.find(
+          // deno-lint-ignore no-explicit-any
+          (a: any) =>
+            a.name.toLowerCase().includes(args.accessoryName.toLowerCase()),
+        );
+        if (!acc) {
+          throw new Error(
+            `Accessory "${args.accessoryName}" not found in discovery data`,
+          );
+        }
+
+        // Look up pairing
+        const pairingId = "pairing-" + acc.id.replace(/:/g, "-");
+        const rawPairing = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          pairingId,
+        );
+        if (!rawPairing) {
+          throw new Error(
+            `No pairing for "${acc.name}". Run 'pair' first with the setup code.`,
+          );
+        }
+
+        const pairing = JSON.parse(
+          new TextDecoder().decode(rawPairing),
+          // deno-lint-ignore no-explicit-any
+        ) as any;
+
+        // Resolve vault expressions for sensitive fields
+        const vaultExprRegex =
+          /^\$\{\{\s*vault\.get\(\s*'([^']+)',\s*'([^']+)'\s*\)\s*\}\}$/;
+        for (const key of Object.keys(pairing)) {
+          const match = typeof pairing[key] === "string" &&
+            pairing[key].match(vaultExprRegex);
+          if (match && context.vaultService) {
+            pairing[key] = await context.vaultService.get(match[1], match[2]);
+          }
+        }
+
+        context.logger.info(
+          "Connecting to {name} at {address}:{port}",
+          { name: acc.name, address: acc.address, port: acc.port },
+        );
+
+        // deno-lint-ignore no-explicit-any
+        const session = await pairVerify(acc.address, acc.port, pairing as any);
+
+        try {
+          // Read accessory database to resolve characteristic
+          const dbResp = await session.request("GET", "/accessories");
+          const db = dbResp.body;
+
+          const resolved = resolveCharacteristic(
+            db,
+            args.characteristic,
+            args.serviceName,
+          );
+          if (!resolved) {
+            // Build helpful error with available characteristics
+            const controllable = extractControllableServices(db);
+            const available = controllable.flatMap((s) =>
+              s.characteristics.map((c) => `${s.serviceName}.${c.name}`)
+            );
+            throw new Error(
+              `Characteristic "${args.characteristic}" not found. ` +
+                `Available: ${available.join(", ") || "none"}`,
+            );
+          }
+
+          const coerced = coerceValue(args.value, resolved.format);
+
+          context.logger.info(
+            "Setting {char} to {value} (aid={aid}, iid={iid})",
+            {
+              char: resolved.name,
+              value: coerced,
+              aid: resolved.aid,
+              iid: resolved.iid,
+            },
+          );
+
+          const writeResp = await session.request("PUT", "/characteristics", {
+            characteristics: [{
+              aid: resolved.aid,
+              iid: resolved.iid,
+              value: coerced,
+            }],
+          });
+
+          const success = writeResp.status === 204 || writeResp.status === 200;
+          if (!success) {
+            context.logger.warn(
+              "Write returned status {status}: {body}",
+              {
+                status: writeResp.status,
+                body: JSON.stringify(writeResp.body),
+              },
+            );
+          }
+
+          // Find the service name for this characteristic
+          const controllable = extractControllableServices(db);
+          let svcName = "Unknown";
+          for (const svc of controllable) {
+            if (svc.characteristics.some((c) => c.iid === resolved.iid)) {
+              svcName = svc.serviceName;
+              break;
+            }
+          }
+
+          const resultHandle = await context.writeResource(
+            "controlResult",
+            `${pairingId}-${resolved.name.toLowerCase()}`,
+            {
+              accessoryName: acc.name,
+              accessoryAddress: acc.address,
+              characteristic: resolved.name,
+              serviceName: svcName,
+              value: coerced,
+              success,
+              controlledAt: new Date().toISOString(),
+            },
+          );
+
+          const summaryHandle = await context.writeResource(
+            "controlSummary",
+            "latest",
+            {
+              method: "controlAccessory",
+              summary: success
+                ? `Set ${resolved.name} to ${coerced} on ${acc.name}`
+                : `Failed to set ${resolved.name} on ${acc.name} (HTTP ${writeResp.status})`,
+              details: {
+                accessory: acc.name,
+                characteristic: resolved.name,
+                value: coerced,
+                success,
+              },
+              generatedAt: new Date().toISOString(),
+            },
+          );
+
+          return { dataHandles: [summaryHandle, resultHandle] };
         } finally {
           session.close();
         }
