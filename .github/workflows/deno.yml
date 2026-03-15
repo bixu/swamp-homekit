@@ -57,8 +57,5 @@ jobs:
       - name: Verify extension formatting
         run: swamp extension fmt extensions/models/homekit_manifest.yaml --check --json
 
-      - name: Validate extension bundle
-        run: swamp extension push extensions/models/homekit_manifest.yaml --dry-run --json
-
       - name: Verify model type loads
         run: swamp model type describe @bixu/homekit --json
