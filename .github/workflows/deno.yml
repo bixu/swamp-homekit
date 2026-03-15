@@ -30,3 +30,32 @@ jobs:
 
       - name: Run tests
         run: deno test --no-check --allow-env
+
+  swamp:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb  # v2.0.3
+        with:
+          deno-version: v2.x
+
+      - name: Install swamp
+        run: |
+          curl -fsSL \
+            "https://github.com/systeminit/swamp/releases/latest/download/swamp-linux-x86_64" \
+            -o /usr/local/bin/swamp
+          chmod +x /usr/local/bin/swamp
+          swamp --version 2>&1
+
+      - name: Initialize swamp repo
+        run: swamp init --force --json
+
+      - name: Verify extension formatting
+        run: swamp extension fmt extensions/models/homekit_manifest.yaml --check --json
+
+      - name: Verify model type loads
+        run: swamp model type describe @bixu/homekit --json
