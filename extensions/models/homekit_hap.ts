@@ -1046,6 +1046,106 @@ export function coerceValue(
   return value;
 }
 
+// ─── Accessory listing ────────────────────────────────────────────────────────
+
+export interface AccessoryCharacteristicInfo {
+  iid: number;
+  name: string;
+  type: string;
+  format?: string;
+  value?: number | string | boolean;
+  unit?: string;
+  writable: boolean;
+}
+
+export interface AccessoryServiceInfo {
+  iid: number;
+  name: string;
+  type: string;
+  typeName: string;
+  characteristics: AccessoryCharacteristicInfo[];
+}
+
+export interface AccessoryInfo {
+  aid: number;
+  name: string;
+  services: AccessoryServiceInfo[];
+}
+
+export function extractAccessoryList(
+  db: HAPAccessoryDatabase,
+): AccessoryInfo[] {
+  const allServiceNames = Object.fromEntries(
+    Object.entries(SERVICE_TYPES).map(([k, v]) => [v.toUpperCase(), k]),
+  );
+  const allCharNames = Object.fromEntries(
+    Object.entries(CHAR_TYPES).map(([k, v]) => [v.toUpperCase(), k]),
+  );
+
+  const result: AccessoryInfo[] = [];
+
+  for (const acc of db.accessories) {
+    // Find the accessory name from the AccessoryInformation service
+    let accName = `Accessory ${acc.aid}`;
+    for (const svc of acc.services) {
+      // AccessoryInformation service type is "3E"
+      if (normalizeUUID(svc.type) === "3E") {
+        const nameChar = svc.characteristics.find(
+          (c) => normalizeUUID(c.type) === CHAR_TYPES.Name,
+        );
+        if (nameChar?.value) accName = String(nameChar.value);
+        break;
+      }
+    }
+
+    const services: AccessoryServiceInfo[] = [];
+
+    for (const svc of acc.services) {
+      const svcType = normalizeUUID(svc.type);
+      // Skip AccessoryInformation (3E) and ProtocolInformation (A2) services
+      if (svcType === "3E" || svcType === "A2") continue;
+
+      const svcTypeName = allServiceNames[svcType] || svcType;
+
+      const nameChar = svc.characteristics.find(
+        (c) => normalizeUUID(c.type) === CHAR_TYPES.Name,
+      );
+      const svcName = (nameChar?.value as string) ||
+        `${svcTypeName} ${acc.aid}.${svc.iid}`;
+
+      const characteristics: AccessoryCharacteristicInfo[] = [];
+      for (const ch of svc.characteristics) {
+        const chType = normalizeUUID(ch.type);
+        // Skip Name characteristic (already used as service name)
+        if (chType === CHAR_TYPES.Name) continue;
+
+        const chName = allCharNames[chType] || ch.description || chType;
+        characteristics.push({
+          iid: ch.iid,
+          name: chName,
+          type: ch.type,
+          format: ch.format,
+          value: ch.value,
+          unit: ch.unit,
+          writable: WRITABLE_CHAR_TYPES.has(chType),
+        });
+      }
+
+      services.push({
+        iid: svc.iid,
+        name: svcName,
+        type: svc.type,
+        typeName: svcTypeName,
+        characteristics,
+      });
+    }
+
+    result.push({ aid: acc.aid, name: accName, services });
+  }
+
+  return result;
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 function padNonce(label: string): Uint8Array {

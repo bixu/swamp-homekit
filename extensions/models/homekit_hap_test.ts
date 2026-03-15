@@ -5,6 +5,7 @@ import {
   bytesToBigint,
   CHAR_TYPES,
   coerceValue,
+  extractAccessoryList,
   extractControllableServices,
   type HAPAccessoryDatabase,
   modPow,
@@ -647,4 +648,147 @@ Deno.test("SERVICE_TYPES contains expected controllable services", () => {
   assertEquals(SERVICE_TYPES.LockMechanism, "45");
   assertEquals(SERVICE_TYPES.Thermostat, "4A");
   assertEquals(SERVICE_TYPES.GarageDoorOpener, "41");
+});
+
+// ─── extractAccessoryList Tests ──────────────────────────────────────────────
+
+Deno.test("extractAccessoryList returns accessory name from AccessoryInformation", () => {
+  const db = makeLightbulbDb();
+  const list = extractAccessoryList(db);
+
+  assertEquals(list.length, 1);
+  assertEquals(list[0].name, "Test Light");
+  assertEquals(list[0].aid, 1);
+});
+
+Deno.test("extractAccessoryList skips AccessoryInformation and ProtocolInformation services", () => {
+  const db: HAPAccessoryDatabase = {
+    accessories: [{
+      aid: 1,
+      services: [
+        {
+          iid: 1,
+          type: "3E", // AccessoryInformation
+          characteristics: [
+            { aid: 1, iid: 2, type: "23", value: "Device" },
+          ],
+        },
+        {
+          iid: 5,
+          type: "A2", // ProtocolInformation
+          characteristics: [
+            { aid: 1, iid: 6, type: "37", value: "1.1.0" },
+          ],
+        },
+        {
+          iid: 10,
+          type: "43", // Lightbulb
+          characteristics: [
+            { aid: 1, iid: 11, type: "23", value: "Light" },
+            { aid: 1, iid: 12, type: "25", value: true, format: "bool" },
+          ],
+        },
+      ],
+    }],
+  };
+  const list = extractAccessoryList(db);
+
+  assertEquals(list[0].services.length, 1);
+  assertEquals(list[0].services[0].typeName, "Lightbulb");
+});
+
+Deno.test("extractAccessoryList includes all service types", () => {
+  const db = makeMultiServiceDb();
+  const list = extractAccessoryList(db);
+
+  assertEquals(list[0].services.length, 2);
+  assertEquals(list[0].services[0].typeName, "Lightbulb");
+  assertEquals(list[0].services[1].typeName, "Switch");
+});
+
+Deno.test("extractAccessoryList marks writable characteristics", () => {
+  const db = makeLightbulbDb();
+  const list = extractAccessoryList(db);
+  const lightSvc = list[0].services[0];
+
+  const onChar = lightSvc.characteristics.find((c) => c.name === "On")!;
+  assertEquals(onChar.writable, true);
+
+  const brightnessChar = lightSvc.characteristics.find((c) =>
+    c.name === "Brightness"
+  )!;
+  assertEquals(brightnessChar.writable, true);
+});
+
+Deno.test("extractAccessoryList marks read-only characteristics", () => {
+  const db = makeLockDb();
+  const list = extractAccessoryList(db);
+  const lockSvc = list[0].services[0];
+
+  const currentState = lockSvc.characteristics.find((c) =>
+    c.name === "LockCurrentState"
+  )!;
+  assertEquals(currentState.writable, false);
+
+  const targetState = lockSvc.characteristics.find((c) =>
+    c.name === "LockTargetState"
+  )!;
+  assertEquals(targetState.writable, true);
+});
+
+Deno.test("extractAccessoryList includes sensor services", () => {
+  const db = makeSensorOnlyDb();
+  const list = extractAccessoryList(db);
+
+  assertEquals(list[0].services.length, 1);
+  assertEquals(list[0].services[0].typeName, "TemperatureSensor");
+
+  const tempChar = list[0].services[0].characteristics.find((c) =>
+    c.name === "CurrentTemperature"
+  )!;
+  assertEquals(tempChar.value, 22.5);
+  assertEquals(tempChar.unit, "celsius");
+  assertEquals(tempChar.writable, false);
+});
+
+Deno.test("extractAccessoryList excludes Name characteristic from service chars", () => {
+  const db = makeLightbulbDb();
+  const list = extractAccessoryList(db);
+  const lightSvc = list[0].services[0];
+
+  // Name is used as service name, not included in characteristics
+  assertEquals(lightSvc.name, "Living Room Light");
+  const nameChar = lightSvc.characteristics.find((c) => c.name === "Name");
+  assertEquals(nameChar, undefined);
+});
+
+Deno.test("extractAccessoryList preserves characteristic metadata", () => {
+  const db = makeLightbulbDb();
+  const list = extractAccessoryList(db);
+  const brightChar = list[0].services[0].characteristics.find((c) =>
+    c.name === "Brightness"
+  )!;
+
+  assertEquals(brightChar.iid, 13);
+  assertEquals(brightChar.format, "int");
+  assertEquals(brightChar.value, 50);
+});
+
+Deno.test("extractAccessoryList fallback name when no AccessoryInformation", () => {
+  const db: HAPAccessoryDatabase = {
+    accessories: [{
+      aid: 3,
+      services: [{
+        iid: 10,
+        type: "43",
+        characteristics: [
+          { aid: 3, iid: 12, type: "25", value: true, format: "bool" },
+        ],
+      }],
+    }],
+  };
+  const list = extractAccessoryList(db);
+
+  assertEquals(list[0].name, "Accessory 3");
+  assertEquals(list[0].services[0].name, "Lightbulb 3.10");
 });
