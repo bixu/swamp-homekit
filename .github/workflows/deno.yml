@@ -59,3 +59,14 @@ jobs:
 
       - name: Verify model type loads
         run: swamp model type describe @bixu/homekit --json
+
+      - name: Verify all methods registered
+        run: |
+          methods=$(swamp model type describe @bixu/homekit --json \
+            | jq -r '.methods[].name')
+          for expected in discover pair readSensors controlAccessory listAccessories; do
+            if ! echo "$methods" | grep -qx "$expected"; then
+              echo "Missing method: $expected"
+              exit 1
+            fi
+          done

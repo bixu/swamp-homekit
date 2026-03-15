@@ -2,6 +2,7 @@ import { z } from "npm:zod@4";
 import bonjourModule from "npm:bonjour-service@1.3.0";
 import {
   coerceValue,
+  extractAccessoryList,
   extractControllableServices,
   extractSensorReadings,
   pairSetup,
@@ -131,6 +132,41 @@ const ControlSummarySchema = z.object({
   generatedAt: z.string(),
 });
 
+const AccessoryCharacteristicInfoSchema = z.object({
+  iid: z.number(),
+  name: z.string(),
+  type: z.string(),
+  format: z.string().optional(),
+  value: z.union([z.number(), z.string(), z.boolean()]).optional(),
+  unit: z.string().optional(),
+  writable: z.boolean(),
+});
+
+const AccessoryServiceInfoSchema = z.object({
+  iid: z.number(),
+  name: z.string(),
+  type: z.string(),
+  typeName: z.string(),
+  characteristics: z.array(AccessoryCharacteristicInfoSchema),
+});
+
+const AccessoryListEntrySchema = z.object({
+  aid: z.number(),
+  name: z.string(),
+  services: z.array(AccessoryServiceInfoSchema),
+  accessoryAddress: z.string(),
+  listedAt: z.string(),
+});
+
+const AccessoryListSummarySchema = z.object({
+  method: z.string(),
+  totalAccessories: z.number(),
+  totalServices: z.number(),
+  totalCharacteristics: z.number(),
+  summary: z.string(),
+  generatedAt: z.string(),
+});
+
 function discoverAccessories(
   timeout: number,
 ): Promise<Record<string, unknown>[]> {
@@ -210,6 +246,19 @@ export const model = {
     controlSummary: {
       description: "Summary of a control operation",
       schema: ControlSummarySchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
+    accessoryList: {
+      description:
+        "Full service and characteristic listing for a paired accessory",
+      schema: AccessoryListEntrySchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
+    accessoryListSummary: {
+      description: "Summary of a listAccessories operation",
+      schema: AccessoryListSummarySchema,
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
@@ -685,6 +734,137 @@ export const model = {
           );
 
           return { dataHandles: [summaryHandle, resultHandle] };
+        } finally {
+          session.close();
+        }
+      },
+    },
+
+    listAccessories: {
+      description:
+        "List all services and characteristics for a paired accessory",
+      arguments: z.object({
+        accessoryName: z.string().describe(
+          "Name of a discovered accessory to list",
+        ),
+      }),
+      execute: async (args, context) => {
+        // Look up accessory
+        const rawDiscovery = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          "discovery-latest",
+        );
+        if (!rawDiscovery) {
+          throw new Error("No discovery data. Run 'discover' first.");
+        }
+
+        const discovery = JSON.parse(
+          new TextDecoder().decode(rawDiscovery),
+          // deno-lint-ignore no-explicit-any
+        ) as any;
+
+        const acc = discovery.accessories?.find(
+          // deno-lint-ignore no-explicit-any
+          (a: any) =>
+            a.name.toLowerCase().includes(args.accessoryName.toLowerCase()),
+        );
+        if (!acc) {
+          throw new Error(
+            `Accessory "${args.accessoryName}" not found in discovery data`,
+          );
+        }
+
+        // Look up pairing
+        const pairingId = "pairing-" + acc.id.replace(/:/g, "-");
+        const rawPairing = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          pairingId,
+        );
+        if (!rawPairing) {
+          throw new Error(
+            `No pairing for "${acc.name}". Run 'pair' first with the setup code.`,
+          );
+        }
+
+        const pairing = JSON.parse(
+          new TextDecoder().decode(rawPairing),
+          // deno-lint-ignore no-explicit-any
+        ) as any;
+
+        // Resolve vault expressions for sensitive fields
+        const vaultExprRegex =
+          /^\$\{\{\s*vault\.get\(\s*'([^']+)',\s*'([^']+)'\s*\)\s*\}\}$/;
+        for (const key of Object.keys(pairing)) {
+          const match = typeof pairing[key] === "string" &&
+            pairing[key].match(vaultExprRegex);
+          if (match && context.vaultService) {
+            pairing[key] = await context.vaultService.get(match[1], match[2]);
+          }
+        }
+
+        context.logger.info(
+          "Connecting to {name} at {address}:{port}",
+          { name: acc.name, address: acc.address, port: acc.port },
+        );
+
+        // deno-lint-ignore no-explicit-any
+        const session = await pairVerify(acc.address, acc.port, pairing as any);
+
+        try {
+          const dbResp = await session.request("GET", "/accessories");
+          const db = dbResp.body;
+
+          const accessories = extractAccessoryList(db);
+
+          const handles = [];
+          let totalServices = 0;
+          let totalChars = 0;
+
+          for (const accessory of accessories) {
+            totalServices += accessory.services.length;
+            for (const svc of accessory.services) {
+              totalChars += svc.characteristics.length;
+            }
+
+            const handle = await context.writeResource(
+              "accessoryList",
+              `${pairingId}-aid-${accessory.aid}`,
+              {
+                aid: accessory.aid,
+                name: accessory.name,
+                services: accessory.services,
+                accessoryAddress: acc.address,
+                listedAt: new Date().toISOString(),
+              },
+            );
+            handles.push(handle);
+          }
+
+          const svcLines = accessories.flatMap((a) =>
+            a.services.map((s) => {
+              const writableCount = s.characteristics.filter((c) =>
+                c.writable
+              ).length;
+              return `${s.name} (${s.typeName}): ${s.characteristics.length} chars, ${writableCount} writable`;
+            })
+          );
+
+          const summaryHandle = await context.writeResource(
+            "accessoryListSummary",
+            "latest",
+            {
+              method: "listAccessories",
+              totalAccessories: accessories.length,
+              totalServices,
+              totalCharacteristics: totalChars,
+              summary: svcLines.join(" | ") || "No services found",
+              generatedAt: new Date().toISOString(),
+            },
+          );
+
+          return { dataHandles: [summaryHandle, ...handles] };
         } finally {
           session.close();
         }
