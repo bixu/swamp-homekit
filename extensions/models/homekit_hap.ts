@@ -765,6 +765,7 @@ export interface HAPCharacteristic {
 
 // Well-known HAP characteristic types (short UUIDs)
 export const CHAR_TYPES = {
+  // Readable
   CurrentTemperature: "11",
   CurrentRelativeHumidity: "10",
   TemperatureDisplayUnits: "36",
@@ -784,10 +785,28 @@ export const CHAR_TYPES = {
   OccupancyDetected: "71",
   LeakDetected: "70",
   SmokeDetected: "76",
+  // Writable
+  On: "25",
+  Brightness: "8",
+  Hue: "13",
+  Saturation: "2F",
+  ColorTemperature: "CE",
+  LockTargetState: "1E",
+  LockCurrentState: "1D",
+  TargetTemperature: "35",
+  TargetHeatingCoolingState: "33",
+  TargetDoorState: "32",
+  CurrentDoorState: "E",
+  TargetPosition: "7C",
+  CurrentPosition: "6D",
+  RotationSpeed: "29",
+  RotationDirection: "28",
+  Active: "B0",
 } as const;
 
 // Service types
 export const SERVICE_TYPES = {
+  // Sensors
   TemperatureSensor: "8A",
   HumiditySensor: "82",
   AirQualitySensor: "8D",
@@ -798,6 +817,18 @@ export const SERVICE_TYPES = {
   LeakSensor: "83",
   SmokeSensor: "87",
   BatteryService: "96",
+  // Controllable
+  Lightbulb: "43",
+  Switch: "49",
+  Outlet: "47",
+  Fan: "B7",
+  Fanv2: "B7",
+  Thermostat: "4A",
+  LockMechanism: "45",
+  GarageDoorOpener: "41",
+  Door: "81",
+  Window: "8B",
+  WindowCovering: "8C",
 } as const;
 
 export function normalizeUUID(type: string): string {
@@ -867,6 +898,152 @@ export function extractSensorReadings(
     }
   }
   return readings;
+}
+
+// ─── Characteristic writing ──────────────────────────────────────────────────
+
+// Characteristics that can be written (target/control characteristics)
+const WRITABLE_CHAR_TYPES = new Set([
+  CHAR_TYPES.On,
+  CHAR_TYPES.Brightness,
+  CHAR_TYPES.Hue,
+  CHAR_TYPES.Saturation,
+  CHAR_TYPES.ColorTemperature,
+  CHAR_TYPES.LockTargetState,
+  CHAR_TYPES.TargetTemperature,
+  CHAR_TYPES.TargetHeatingCoolingState,
+  CHAR_TYPES.TargetDoorState,
+  CHAR_TYPES.TargetPosition,
+  CHAR_TYPES.RotationSpeed,
+  CHAR_TYPES.RotationDirection,
+  CHAR_TYPES.Active,
+]);
+
+// Service types that support control
+const CONTROLLABLE_SERVICE_TYPES = new Set([
+  SERVICE_TYPES.Lightbulb,
+  SERVICE_TYPES.Switch,
+  SERVICE_TYPES.Outlet,
+  SERVICE_TYPES.Fan,
+  SERVICE_TYPES.Thermostat,
+  SERVICE_TYPES.LockMechanism,
+  SERVICE_TYPES.GarageDoorOpener,
+  SERVICE_TYPES.Door,
+  SERVICE_TYPES.Window,
+  SERVICE_TYPES.WindowCovering,
+]);
+
+export interface ControllableCharacteristic {
+  aid: number;
+  iid: number;
+  name: string;
+  type: string;
+  format?: string;
+  value?: number | string | boolean;
+  unit?: string;
+}
+
+export interface ControllableService {
+  serviceName: string;
+  serviceType: string;
+  characteristics: ControllableCharacteristic[];
+}
+
+export function extractControllableServices(
+  db: HAPAccessoryDatabase,
+): ControllableService[] {
+  const services: ControllableService[] = [];
+
+  for (const acc of db.accessories) {
+    for (const svc of acc.services) {
+      const svcType = normalizeUUID(svc.type);
+      if (!CONTROLLABLE_SERVICE_TYPES.has(svcType)) continue;
+
+      const nameChar = svc.characteristics.find(
+        (c) => normalizeUUID(c.type) === CHAR_TYPES.Name,
+      );
+      const serviceName = (nameChar?.value as string) ||
+        `Service ${acc.aid}.${svc.iid}`;
+
+      const controllableChars: ControllableCharacteristic[] = [];
+      for (const ch of svc.characteristics) {
+        const chType = normalizeUUID(ch.type);
+        if (!WRITABLE_CHAR_TYPES.has(chType)) continue;
+        const chName = Object.entries(CHAR_TYPES).find(
+          ([_, v]) => v.toUpperCase() === chType.toUpperCase(),
+        );
+        controllableChars.push({
+          aid: acc.aid,
+          iid: ch.iid,
+          name: chName ? chName[0] : chType,
+          type: ch.type,
+          format: ch.format,
+          value: ch.value,
+          unit: ch.unit,
+        });
+      }
+
+      if (controllableChars.length > 0) {
+        services.push({
+          serviceName,
+          serviceType: svc.type,
+          characteristics: controllableChars,
+        });
+      }
+    }
+  }
+  return services;
+}
+
+export function resolveCharacteristic(
+  db: HAPAccessoryDatabase,
+  characteristicName: string,
+  serviceName?: string,
+): { aid: number; iid: number; name: string; format?: string } | null {
+  const targetType = Object.entries(CHAR_TYPES).find(
+    ([k]) => k.toLowerCase() === characteristicName.toLowerCase(),
+  );
+  if (!targetType) return null;
+
+  const services = extractControllableServices(db);
+  for (const svc of services) {
+    if (
+      serviceName && !svc.serviceName.toLowerCase().includes(
+        serviceName.toLowerCase(),
+      )
+    ) {
+      continue;
+    }
+    for (const ch of svc.characteristics) {
+      if (ch.name.toLowerCase() === characteristicName.toLowerCase()) {
+        return { aid: ch.aid, iid: ch.iid, name: ch.name, format: ch.format };
+      }
+    }
+  }
+  return null;
+}
+
+export function coerceValue(
+  value: number | string | boolean,
+  format?: string,
+): number | string | boolean {
+  if (format === "bool") {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    if (typeof value === "string") {
+      return value === "true" || value === "1" || value === "on";
+    }
+  }
+  if (
+    format === "uint8" || format === "uint16" || format === "uint32" ||
+    format === "int" || format === "float"
+  ) {
+    if (typeof value === "number") return value;
+    if (typeof value === "boolean") return value ? 1 : 0;
+    const n = Number(value);
+    if (!isNaN(n)) return n;
+  }
+  return value;
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
