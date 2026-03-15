@@ -3,7 +3,14 @@ import {
   _N_HEX,
   bigintToBytes,
   bytesToBigint,
+  CHAR_TYPES,
+  coerceValue,
+  extractControllableServices,
+  type HAPAccessoryDatabase,
   modPow,
+  normalizeUUID,
+  resolveCharacteristic,
+  SERVICE_TYPES,
   SRP_PAD_LEN,
   SRPClient,
   tlvDecode,
@@ -280,4 +287,364 @@ Deno.test("SRP round-trip: deterministic with fixed keys", () => {
 
   const { valid } = server1.verify(client1.getPublicKey(), proof1);
   assertEquals(valid, true, "Server should accept proof");
+});
+
+// ─── Characteristic Control Tests ────────────────────────────────────────────
+
+function makeLightbulbDb(): HAPAccessoryDatabase {
+  return {
+    accessories: [{
+      aid: 1,
+      services: [
+        {
+          iid: 1,
+          type: "3E", // AccessoryInformation
+          characteristics: [
+            { aid: 1, iid: 2, type: "23", value: "Test Light" },
+          ],
+        },
+        {
+          iid: 10,
+          type: "43", // Lightbulb
+          characteristics: [
+            { aid: 1, iid: 11, type: "23", value: "Living Room Light" },
+            {
+              aid: 1,
+              iid: 12,
+              type: "25",
+              value: false,
+              format: "bool",
+            }, // On
+            {
+              aid: 1,
+              iid: 13,
+              type: "8",
+              value: 50,
+              format: "int",
+            }, // Brightness
+            {
+              aid: 1,
+              iid: 14,
+              type: "13",
+              value: 200,
+              format: "float",
+            }, // Hue
+            {
+              aid: 1,
+              iid: 15,
+              type: "2F",
+              value: 80,
+              format: "float",
+            }, // Saturation
+          ],
+        },
+      ],
+    }],
+  };
+}
+
+function makeLockDb(): HAPAccessoryDatabase {
+  return {
+    accessories: [{
+      aid: 1,
+      services: [
+        {
+          iid: 1,
+          type: "3E",
+          characteristics: [
+            { aid: 1, iid: 2, type: "23", value: "Front Door Lock" },
+          ],
+        },
+        {
+          iid: 10,
+          type: "45", // LockMechanism
+          characteristics: [
+            { aid: 1, iid: 11, type: "23", value: "Front Door" },
+            {
+              aid: 1,
+              iid: 12,
+              type: "1D",
+              value: 1,
+              format: "uint8",
+            }, // LockCurrentState
+            {
+              aid: 1,
+              iid: 13,
+              type: "1E",
+              value: 1,
+              format: "uint8",
+            }, // LockTargetState
+          ],
+        },
+      ],
+    }],
+  };
+}
+
+function makeMultiServiceDb(): HAPAccessoryDatabase {
+  return {
+    accessories: [{
+      aid: 1,
+      services: [
+        {
+          iid: 10,
+          type: "43", // Lightbulb
+          characteristics: [
+            { aid: 1, iid: 11, type: "23", value: "Ceiling Light" },
+            { aid: 1, iid: 12, type: "25", value: true, format: "bool" },
+            { aid: 1, iid: 13, type: "8", value: 100, format: "int" },
+          ],
+        },
+        {
+          iid: 20,
+          type: "49", // Switch
+          characteristics: [
+            { aid: 1, iid: 21, type: "23", value: "Wall Switch" },
+            { aid: 1, iid: 22, type: "25", value: false, format: "bool" },
+          ],
+        },
+      ],
+    }],
+  };
+}
+
+function makeSensorOnlyDb(): HAPAccessoryDatabase {
+  return {
+    accessories: [{
+      aid: 1,
+      services: [{
+        iid: 10,
+        type: "8A", // TemperatureSensor
+        characteristics: [
+          { aid: 1, iid: 11, type: "23", value: "Temp Sensor" },
+          {
+            aid: 1,
+            iid: 12,
+            type: "11",
+            value: 22.5,
+            unit: "celsius",
+          },
+        ],
+      }],
+    }],
+  };
+}
+
+Deno.test("extractControllableServices finds lightbulb controls", () => {
+  const db = makeLightbulbDb();
+  const services = extractControllableServices(db);
+
+  assertEquals(services.length, 1);
+  assertEquals(services[0].serviceName, "Living Room Light");
+  assertEquals(normalizeUUID(services[0].serviceType), SERVICE_TYPES.Lightbulb);
+
+  const charNames = services[0].characteristics.map((c) => c.name);
+  assertEquals(charNames.includes("On"), true);
+  assertEquals(charNames.includes("Brightness"), true);
+  assertEquals(charNames.includes("Hue"), true);
+  assertEquals(charNames.includes("Saturation"), true);
+});
+
+Deno.test("extractControllableServices finds lock controls", () => {
+  const db = makeLockDb();
+  const services = extractControllableServices(db);
+
+  assertEquals(services.length, 1);
+  assertEquals(services[0].serviceName, "Front Door");
+
+  const charNames = services[0].characteristics.map((c) => c.name);
+  assertEquals(charNames.includes("LockTargetState"), true);
+  // LockCurrentState is not writable, should not appear
+  assertEquals(charNames.includes("LockCurrentState"), false);
+});
+
+Deno.test("extractControllableServices finds multiple services", () => {
+  const db = makeMultiServiceDb();
+  const services = extractControllableServices(db);
+
+  assertEquals(services.length, 2);
+  const names = services.map((s) => s.serviceName);
+  assertEquals(names.includes("Ceiling Light"), true);
+  assertEquals(names.includes("Wall Switch"), true);
+});
+
+Deno.test("extractControllableServices returns empty for sensor-only", () => {
+  const db = makeSensorOnlyDb();
+  const services = extractControllableServices(db);
+
+  assertEquals(services.length, 0);
+});
+
+Deno.test("extractControllableServices includes aid and iid", () => {
+  const db = makeLightbulbDb();
+  const services = extractControllableServices(db);
+  const onChar = services[0].characteristics.find((c) => c.name === "On")!;
+
+  assertEquals(onChar.aid, 1);
+  assertEquals(onChar.iid, 12);
+  assertEquals(onChar.format, "bool");
+});
+
+Deno.test("resolveCharacteristic finds On in lightbulb", () => {
+  const db = makeLightbulbDb();
+  const result = resolveCharacteristic(db, "On");
+
+  assertEquals(result !== null, true);
+  assertEquals(result!.aid, 1);
+  assertEquals(result!.iid, 12);
+  assertEquals(result!.name, "On");
+  assertEquals(result!.format, "bool");
+});
+
+Deno.test("resolveCharacteristic finds Brightness in lightbulb", () => {
+  const db = makeLightbulbDb();
+  const result = resolveCharacteristic(db, "Brightness");
+
+  assertEquals(result !== null, true);
+  assertEquals(result!.iid, 13);
+});
+
+Deno.test("resolveCharacteristic is case-insensitive", () => {
+  const db = makeLightbulbDb();
+  const lower = resolveCharacteristic(db, "on");
+  const upper = resolveCharacteristic(db, "ON");
+  const mixed = resolveCharacteristic(db, "oN");
+
+  assertEquals(lower !== null, true);
+  assertEquals(upper !== null, true);
+  assertEquals(mixed !== null, true);
+  assertEquals(lower!.iid, upper!.iid);
+  assertEquals(lower!.iid, mixed!.iid);
+});
+
+Deno.test("resolveCharacteristic filters by service name", () => {
+  const db = makeMultiServiceDb();
+
+  const ceiling = resolveCharacteristic(db, "On", "Ceiling");
+  assertEquals(ceiling !== null, true);
+  assertEquals(ceiling!.iid, 12);
+
+  const wall = resolveCharacteristic(db, "On", "Wall");
+  assertEquals(wall !== null, true);
+  assertEquals(wall!.iid, 22);
+});
+
+Deno.test("resolveCharacteristic returns null for unknown characteristic", () => {
+  const db = makeLightbulbDb();
+  const result = resolveCharacteristic(db, "NonExistent");
+
+  assertEquals(result, null);
+});
+
+Deno.test("resolveCharacteristic returns null for read-only characteristic", () => {
+  const db = makeLockDb();
+  // LockCurrentState exists but is not writable
+  const result = resolveCharacteristic(db, "LockCurrentState");
+
+  assertEquals(result, null);
+});
+
+Deno.test("resolveCharacteristic returns null when service name doesn't match", () => {
+  const db = makeMultiServiceDb();
+  const result = resolveCharacteristic(db, "On", "Bedroom");
+
+  assertEquals(result, null);
+});
+
+// ─── coerceValue Tests ───────────────────────────────────────────────────────
+
+Deno.test("coerceValue: bool format from boolean", () => {
+  assertEquals(coerceValue(true, "bool"), true);
+  assertEquals(coerceValue(false, "bool"), false);
+});
+
+Deno.test("coerceValue: bool format from number", () => {
+  assertEquals(coerceValue(1, "bool"), true);
+  assertEquals(coerceValue(0, "bool"), false);
+  assertEquals(coerceValue(42, "bool"), true);
+});
+
+Deno.test("coerceValue: bool format from string", () => {
+  assertEquals(coerceValue("true", "bool"), true);
+  assertEquals(coerceValue("1", "bool"), true);
+  assertEquals(coerceValue("on", "bool"), true);
+  assertEquals(coerceValue("false", "bool"), false);
+  assertEquals(coerceValue("0", "bool"), false);
+  assertEquals(coerceValue("off", "bool"), false);
+});
+
+Deno.test("coerceValue: uint8 format from number", () => {
+  assertEquals(coerceValue(0, "uint8"), 0);
+  assertEquals(coerceValue(255, "uint8"), 255);
+});
+
+Deno.test("coerceValue: uint8 format from boolean", () => {
+  assertEquals(coerceValue(true, "uint8"), 1);
+  assertEquals(coerceValue(false, "uint8"), 0);
+});
+
+Deno.test("coerceValue: uint8 format from string", () => {
+  assertEquals(coerceValue("75", "uint8"), 75);
+  assertEquals(coerceValue("0", "uint8"), 0);
+});
+
+Deno.test("coerceValue: float format", () => {
+  assertEquals(coerceValue(22.5, "float"), 22.5);
+  assertEquals(coerceValue("22.5", "float"), 22.5);
+  assertEquals(coerceValue(true, "float"), 1);
+});
+
+Deno.test("coerceValue: int format", () => {
+  assertEquals(coerceValue(100, "int"), 100);
+  assertEquals(coerceValue("50", "int"), 50);
+});
+
+Deno.test("coerceValue: unknown format returns value unchanged", () => {
+  assertEquals(coerceValue("hello", undefined), "hello");
+  assertEquals(coerceValue(42, undefined), 42);
+  assertEquals(coerceValue(true, undefined), true);
+});
+
+// ─── normalizeUUID Tests ─────────────────────────────────────────────────────
+
+Deno.test("normalizeUUID: short UUID", () => {
+  assertEquals(normalizeUUID("25"), "25");
+  assertEquals(normalizeUUID("8"), "8");
+  assertEquals(normalizeUUID("8A"), "8A");
+});
+
+Deno.test("normalizeUUID: full UUID extracts significant part", () => {
+  assertEquals(
+    normalizeUUID("00000025-0000-1000-8000-0026BB765291"),
+    "25",
+  );
+  assertEquals(
+    normalizeUUID("0000008A-0000-1000-8000-0026BB765291"),
+    "8A",
+  );
+});
+
+Deno.test("normalizeUUID: case normalization", () => {
+  assertEquals(normalizeUUID("8a"), "8A");
+  assertEquals(normalizeUUID("ce"), "CE");
+});
+
+// ─── CHAR_TYPES / SERVICE_TYPES Tests ────────────────────────────────────────
+
+Deno.test("CHAR_TYPES contains expected writable characteristics", () => {
+  assertEquals(CHAR_TYPES.On, "25");
+  assertEquals(CHAR_TYPES.Brightness, "8");
+  assertEquals(CHAR_TYPES.LockTargetState, "1E");
+  assertEquals(CHAR_TYPES.TargetTemperature, "35");
+  assertEquals(CHAR_TYPES.TargetDoorState, "32");
+  assertEquals(CHAR_TYPES.TargetPosition, "7C");
+  assertEquals(CHAR_TYPES.Active, "B0");
+});
+
+Deno.test("SERVICE_TYPES contains expected controllable services", () => {
+  assertEquals(SERVICE_TYPES.Lightbulb, "43");
+  assertEquals(SERVICE_TYPES.Switch, "49");
+  assertEquals(SERVICE_TYPES.LockMechanism, "45");
+  assertEquals(SERVICE_TYPES.Thermostat, "4A");
+  assertEquals(SERVICE_TYPES.GarageDoorOpener, "41");
 });
