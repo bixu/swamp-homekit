@@ -11,6 +11,7 @@
 # Runtime data (not needed in version control)
 .swamp/
 
-# Claude Code user memory (per-user, not shared)
+# Claude Code per-user data (memory, skills managed by swamp)
 .claude/projects/
+.claude/skills/
 # END swamp managed section
