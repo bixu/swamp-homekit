@@ -1,0 +1,20 @@
+manifestVersion: 1
+name: "@bixu/homekit"
+version: "2026.04.23.1"
+description: "Discover, pair with, read sensors from, control, and list HomeKit accessories — pure TypeScript HAP protocol implementation"
+repository: https://github.com/bixu/swamp-homekit
+platforms:
+  - darwin-aarch64
+  - darwin-x86_64
+  - linux-x86_64
+  - linux-aarch64
+models:
+  - homekit.ts
+  - homekit_hap.ts
+labels:
+  - homekit
+  - iot
+  - mdns
+additionalFiles:
+  - README.md
+  - LICENSE.txt

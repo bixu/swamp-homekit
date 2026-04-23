@@ -35,6 +35,7 @@ const TLV_ERROR_NAMES: Record<number, string> = {
   0x07: "kTLVError_Busy",
 };
 
+/** Encode TLV8 entries into a single byte array per the HAP specification. */
 export function tlvEncode(entries: [number, Uint8Array][]): Uint8Array {
   const chunks: Uint8Array[] = [];
   for (const [type, value] of entries) {
@@ -52,6 +53,7 @@ export function tlvEncode(entries: [number, Uint8Array][]): Uint8Array {
   return concatBytes(...chunks);
 }
 
+/** Decode a TLV8 byte array into a map of type to concatenated value. */
 export function tlvDecode(data: Uint8Array): Map<number, Uint8Array> {
   const result = new Map<number, Uint8Array>();
   let i = 0;
@@ -72,8 +74,10 @@ export function tlvDecode(data: Uint8Array): Map<number, Uint8Array> {
 
 // ─── BigInt helpers ──────────────────────────────────────────────────────────
 
+/** SRP padding length in bytes (3072-bit group = 384 bytes). */
 export const SRP_PAD_LEN = 384; // 3072 bits = 384 bytes
 
+/** Convert a BigInt to a big-endian byte array of the given length. */
 export function bigintToBytes(n: bigint, length: number): Uint8Array {
   const hex = n.toString(16).padStart(length * 2, "0");
   const bytes = new Uint8Array(length);
@@ -83,12 +87,14 @@ export function bigintToBytes(n: bigint, length: number): Uint8Array {
   return bytes;
 }
 
+/** Convert a big-endian byte array to a BigInt. */
 export function bytesToBigint(bytes: Uint8Array): bigint {
   let hex = "";
   for (const b of bytes) hex += b.toString(16).padStart(2, "0");
   return BigInt("0x" + (hex || "0"));
 }
 
+/** Compute modular exponentiation: base^exp mod mod. */
 export function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
   let result = 1n;
   base = ((base % mod) + mod) % mod;
@@ -102,6 +108,7 @@ export function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
 
 // ─── SRP-6a (RFC 5054, 3072-bit) ────────────────────────────────────────────
 
+/** RFC 5054 3072-bit SRP group prime N in hexadecimal. */
 export const _N_HEX =
   "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74" +
   "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437" +
@@ -125,6 +132,7 @@ function srpComputeK(): bigint {
   return bytesToBigint(sha512(concatBytes(nBytes, gBytes)));
 }
 
+/** SRP-6a client for HAP Pair-Setup (3072-bit group, SHA-512). */
 export class SRPClient {
   private a: bigint;
   private A: bigint;
@@ -330,6 +338,7 @@ function makeNonce(counter: number): Uint8Array {
   return nonce;
 }
 
+/** Encrypted HAP session using ChaCha20-Poly1305 framing over a TCP connection. */
 export class EncryptedSession {
   private conn: Deno.TcpConn;
   private encryptKey: Uint8Array;
@@ -469,6 +478,7 @@ async function readExact(
 
 // ─── Pair Setup ──────────────────────────────────────────────────────────────
 
+/** Stored pairing credentials from a completed Pair-Setup exchange. */
 export interface PairingData {
   accessoryId: string;
   accessoryLTPK: string; // hex-encoded Ed25519 public key
@@ -476,6 +486,7 @@ export interface PairingData {
   clientLTPK: string; // hex-encoded Ed25519 public key
 }
 
+/** Perform HAP Pair-Setup with an accessory and return long-term pairing credentials. */
 export async function pairSetup(
   host: string,
   port: number,
@@ -623,6 +634,7 @@ export async function pairSetup(
 
 // ─── Pair Verify ─────────────────────────────────────────────────────────────
 
+/** Perform HAP Pair-Verify and return an encrypted session for authenticated requests. */
 export async function pairVerify(
   host: string,
   port: number,
@@ -738,21 +750,25 @@ export async function pairVerify(
 
 // ─── Characteristic reading ──────────────────────────────────────────────────
 
+/** Top-level HAP accessory database returned by GET /accessories. */
 export interface HAPAccessoryDatabase {
   accessories: HAPAccessory[];
 }
 
+/** A single HAP accessory with its service list. */
 export interface HAPAccessory {
   aid: number;
   services: HAPService[];
 }
 
+/** A HAP service containing a list of characteristics. */
 export interface HAPService {
   iid: number;
   type: string;
   characteristics: HAPCharacteristic[];
 }
 
+/** A single HAP characteristic with its type, value, and metadata. */
 export interface HAPCharacteristic {
   aid: number;
   iid: number;
@@ -763,7 +779,7 @@ export interface HAPCharacteristic {
   unit?: string;
 }
 
-// Well-known HAP characteristic types (short UUIDs)
+/** Well-known HAP characteristic types as short UUID hex strings. */
 export const CHAR_TYPES = {
   // Readable
   CurrentTemperature: "11",
@@ -804,7 +820,7 @@ export const CHAR_TYPES = {
   Active: "B0",
 } as const;
 
-// Service types
+/** Well-known HAP service types as short UUID hex strings. */
 export const SERVICE_TYPES = {
   // Sensors
   TemperatureSensor: "8A",
@@ -831,6 +847,7 @@ export const SERVICE_TYPES = {
   WindowCovering: "8C",
 } as const;
 
+/** Normalize a HAP UUID (full or short form) to its uppercase short hex form. */
 export function normalizeUUID(type: string): string {
   // HAP uses short UUIDs like "11" which expand to
   // "00000011-0000-1000-8000-0026BB765291"
@@ -841,6 +858,7 @@ export function normalizeUUID(type: string): string {
   return type.toUpperCase();
 }
 
+/** A sensor reading from a single HAP service. */
 export interface SensorReading {
   serviceName: string;
   serviceType: string;
@@ -852,6 +870,7 @@ export interface SensorReading {
   }[];
 }
 
+/** Extract sensor readings from a HAP accessory database. */
 export function extractSensorReadings(
   db: HAPAccessoryDatabase,
 ): SensorReading[] {
@@ -933,6 +952,7 @@ const CONTROLLABLE_SERVICE_TYPES = new Set([
   SERVICE_TYPES.WindowCovering,
 ]);
 
+/** A writable characteristic on a controllable service. */
 export interface ControllableCharacteristic {
   aid: number;
   iid: number;
@@ -943,12 +963,14 @@ export interface ControllableCharacteristic {
   unit?: string;
 }
 
+/** A HAP service with writable characteristics that can be controlled. */
 export interface ControllableService {
   serviceName: string;
   serviceType: string;
   characteristics: ControllableCharacteristic[];
 }
 
+/** Extract controllable services and their writable characteristics from a HAP database. */
 export function extractControllableServices(
   db: HAPAccessoryDatabase,
 ): ControllableService[] {
@@ -995,6 +1017,7 @@ export function extractControllableServices(
   return services;
 }
 
+/** Resolve a characteristic name to its aid/iid for writing, optionally filtering by service. */
 export function resolveCharacteristic(
   db: HAPAccessoryDatabase,
   characteristicName: string,
@@ -1023,6 +1046,7 @@ export function resolveCharacteristic(
   return null;
 }
 
+/** Coerce a value to the correct type for a HAP characteristic format. */
 export function coerceValue(
   value: number | string | boolean,
   format?: string,
@@ -1048,6 +1072,7 @@ export function coerceValue(
 
 // ─── Accessory listing ────────────────────────────────────────────────────────
 
+/** Detailed characteristic info for accessory listing. */
 export interface AccessoryCharacteristicInfo {
   iid: number;
   name: string;
@@ -1058,6 +1083,7 @@ export interface AccessoryCharacteristicInfo {
   writable: boolean;
 }
 
+/** Detailed service info for accessory listing. */
 export interface AccessoryServiceInfo {
   iid: number;
   name: string;
@@ -1066,12 +1092,14 @@ export interface AccessoryServiceInfo {
   characteristics: AccessoryCharacteristicInfo[];
 }
 
+/** Full accessory info including all services and characteristics. */
 export interface AccessoryInfo {
   aid: number;
   name: string;
   services: AccessoryServiceInfo[];
 }
 
+/** Extract a full accessory listing with services and characteristics from a HAP database. */
 export function extractAccessoryList(
   db: HAPAccessoryDatabase,
 ): AccessoryInfo[] {
