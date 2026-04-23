@@ -196,9 +196,10 @@ function discoverAccessories(
   });
 }
 
+/** HomeKit extension model for discovering, pairing, reading, and controlling accessories. */
 export const model = {
   type: "@bixu/homekit",
-  version: "2026.03.14.3",
+  version: "2026.03.15.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     discovery: {
