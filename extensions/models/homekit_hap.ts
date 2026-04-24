@@ -109,7 +109,7 @@ export function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
 // ─── SRP-6a (RFC 5054, 3072-bit) ────────────────────────────────────────────
 
 /** RFC 5054 3072-bit SRP group prime N in hexadecimal. */
-export const _N_HEX =
+export const _N_HEX: string =
   "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74" +
   "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437" +
   "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7E" +
