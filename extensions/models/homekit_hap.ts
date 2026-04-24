@@ -109,7 +109,7 @@ export function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
 // ─── SRP-6a (RFC 5054, 3072-bit) ────────────────────────────────────────────
 
 /** RFC 5054 3072-bit SRP group prime N in hexadecimal. */
-export const _N_HEX =
+export const _N_HEX: string =
   "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74" +
   "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437" +
   "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7E" +
@@ -256,13 +256,13 @@ async function readHttpResponse(
   conn: Deno.TcpConn,
 ): Promise<{ status: number; body: Uint8Array }> {
   const buf = new Uint8Array(65536);
-  let data = new Uint8Array(0);
+  let data: Uint8Array = new Uint8Array(0);
 
   // Read until we have the full response
   while (true) {
     const n = await conn.read(buf);
     if (n === null) break;
-    data = concatBytes(data, buf.slice(0, n));
+    data = concatBytes(data, new Uint8Array(buf.buffer, 0, n));
 
     // Check if we have complete headers
     const headerEnd = findHeaderEnd(data);
@@ -277,7 +277,7 @@ async function readHttpResponse(
       while (data.length < bodyStart + contentLength) {
         const n2 = await conn.read(buf);
         if (n2 === null) break;
-        data = concatBytes(data, buf.slice(0, n2));
+        data = concatBytes(data, new Uint8Array(buf.buffer, 0, n2));
       }
       const statusMatch = headerStr.match(/HTTP\/1\.[01]\s+(\d+)/);
       const status = statusMatch ? parseInt(statusMatch[1]) : 0;
@@ -922,7 +922,7 @@ export function extractSensorReadings(
 // ─── Characteristic writing ──────────────────────────────────────────────────
 
 // Characteristics that can be written (target/control characteristics)
-const WRITABLE_CHAR_TYPES = new Set([
+const WRITABLE_CHAR_TYPES = new Set<string>([
   CHAR_TYPES.On,
   CHAR_TYPES.Brightness,
   CHAR_TYPES.Hue,
@@ -939,7 +939,7 @@ const WRITABLE_CHAR_TYPES = new Set([
 ]);
 
 // Service types that support control
-const CONTROLLABLE_SERVICE_TYPES = new Set([
+const CONTROLLABLE_SERVICE_TYPES = new Set<string>([
   SERVICE_TYPES.Lightbulb,
   SERVICE_TYPES.Switch,
   SERVICE_TYPES.Outlet,

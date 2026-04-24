@@ -11,7 +11,9 @@
 # Runtime data (not needed in version control)
 .swamp/
 
-# Claude Code per-user data (memory, skills managed by swamp)
-.claude/projects/
-.claude/skills/
+# Local extension sources (developer-specific, not shared)
+.swamp-sources.yaml
+
+# Claude Code configuration (managed by swamp)
+.claude/
 # END swamp managed section
